@@ -102,6 +102,7 @@ TT_PLUS = 'PLUS'
 TT_MINUS = 'MINUS'
 TT_MUL = 'MUL'
 TT_DIV = 'DIV'
+TT_POW = 'POW'
 TT_LPAREN = 'LPAREN'
 TT_RPAREN = 'RPAREN'
 TT_EOF = 'EOF'
@@ -162,6 +163,9 @@ class Lexer:
                 self.advance()
             elif self.current_char == '/':
                 tokens.append(Token(TT_DIV, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == '^':
+                tokens.append(Token(TT_POW, pos_start=self.pos))
                 self.advance()
             elif self.current_char == '(':
                 tokens.append(Token(TT_LPAREN, pos_start=self.pos))
@@ -283,7 +287,7 @@ class Parser:
         if not res.error and self.current_tok.type != TT_EOF:
             return res.failure(InvalidSyntaxError(
                 self.current_tok.pos_start, self.current_tok.pos_end,
-                "Expected '+', '-', '*' or '/'"
+                "Expected '+', '-', '*','/' or '^'"
             ))
         return res
 
@@ -324,7 +328,7 @@ class Parser:
         ))
 
     def term(self):
-        return self.bin_op(self.factor, (TT_MUL, TT_DIV))
+        return self.bin_op(self.factor, (TT_MUL, TT_DIV, TT_POW))
 
     def expr(self):
         return self.bin_op(self.term, (TT_PLUS, TT_MINUS))
@@ -419,6 +423,15 @@ class Number:
                 return Number(self.value/other.value).setcontext(self.context), None
             return None, RunTimeError(other.pos_start, other.pos_end, "Division by zero error", self.context)
 
+    def poweredTo(self,other):
+        if isinstance(other, Number):
+            if self.value==0 and other.value<=0:
+                return None, RunTimeError(other.pos_start, other.pos_end, "Only positive power of zero is defined", self.context)
+            if self.value<0 and other.value!=int(other.value):
+                return None, RunTimeError(other.pos_start, other.pos_end, "Fractional power to negatives are defined", self.context)
+            return Number(self.value**other.value).setcontext(self.context), None
+            
+
     def __repr__(self):
         return str(self.value)
 
@@ -456,6 +469,8 @@ class Interpretor:
             result, error = left.multiTo(right)
         if (node.op_tok.type == TT_DIV):
             result, error = left.divideBy(right)
+        if (node.op_tok.type == TT_POW):
+            result, error = left.poweredTo(right)
         if error:
             return res.failure(error)
         return res.success(result.setPos(node.pos_start, node.pos_end))
@@ -468,12 +483,11 @@ class Interpretor:
 
         error = None
 
-        if node.op_tok.value == TT_MINUS:
+        if node.op_tok.type== TT_MINUS:
             number, error = number.multiTo(Number(-1))
 
         if error:
             return res.failure(error)
-
         return res.success(number.setPos(node.pos_start, node.pos_end))
 
 #######################################
