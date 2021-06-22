@@ -40,6 +40,31 @@ class InvalidSyntaxError(Error):
     def __init__(self, pos_start, pos_end, details=''):
         super().__init__(pos_start, pos_end, 'Invalid Syntax', details)
 
+
+class RunTimeError(Error):
+    def __init__(self, pos_start, pos_end, details, context):
+        super().__init__(pos_start, pos_end, 'Run Time Error', details)
+        self.context = context
+
+    def as_string(self):
+        result = self.generate_traceback()
+        result += f'{self.error_name}: {self.details}\n'
+        result += \
+            string_with_arrows(self.pos_start.ftxt,
+                               self.pos_start, self.pos_end)
+
+        return result
+
+    def generate_traceback(self):
+        result = ""
+        pos = self.pos_start
+        ctx = self.context
+        while ctx:
+            result = f'File {pos.fn}, line {pos.ln + 1}, {ctx.display_name}\n' + result
+            pos = ctx.parent_entry_pos
+            ctx = ctx.parent
+        return "Traceback recent calls: "+result
+
 #######################################
 # POSITION
 #######################################
@@ -183,6 +208,7 @@ class NumberNode:
         self.tok = tok
         self.pos_start = tok.pos_start
         self.pos_end = tok.pos_end
+
     def __repr__(self):
         return f'{self.tok}'
 
@@ -194,6 +220,7 @@ class BinOpNode:
         self.right_node = right_node
         self.pos_start = self.left_node.pos_start
         self.pos_end = self.right_node.pos_end
+
     def __repr__(self):
         return f'({self.left_node}, {self.op_tok}, {self.right_node})'
 
@@ -204,6 +231,7 @@ class UnaryOpNode:
         self.node = node
         self.pos_start = self.op_tok.pos_start
         self.pos_end = self.node.pos_end
+
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
 
@@ -318,6 +346,41 @@ class Parser:
             left = BinOpNode(left, op_tok, right)
 
         return res.success(left)
+
+########################################################################
+# RUNTIME RESULT
+########################################################################
+
+
+class RTResult:
+    def __init__(self):
+        self.value = None
+        self.err = None
+
+    def register(self, res):
+        if res.err:
+            self.err = res.error
+        return res.value
+
+    def success(self, value):
+        self.value = value
+        return self
+
+    def failure(self, error):
+        self.err = error
+        return self
+
+#######################################
+# CONTEXT
+#######################################
+
+
+class Context:
+    def __init__(self, display_name, parent=None, parent_entry_pos=None):
+        self.display_name = display_name
+        self.parent = parent
+        self.parent_entry_pos = parent_entry_pos
+
 ########################################################################
 # VALUES
 ########################################################################
@@ -327,30 +390,37 @@ class Number:
     def __init__(self, value):
         self.value = value
         self.setPos()
+        self.setcontext()
 
     def setPos(self, start_pos=None, end_pos=None):
         self.pos_start = start_pos
         self.pos_end = end_pos
         return self
 
-    def addedTo(self,other):
-        if isinstance(other,Number):
-            return Number(self.value+other.value)
+    def setcontext(self, context=None):
+        self.context = context
+        return self
 
-    def subbedBy(self,other):
-        if isinstance(other,Number):
-            return Number(self.value-other.value)
-    
-    def multiTo(self,other):
-        if isinstance(other,Number):
-            return Number(self.value*other.value)
-    
-    def divideBy(self,other):
-        if isinstance(other,Number):
-            return Number(self.value/other.value)
+    def addedTo(self, other):
+        if isinstance(other, Number):
+            return Number(self.value+other.value).setcontext(self.context), None
+
+    def subbedBy(self, other):
+        if isinstance(other, Number):
+            return Number(self.value-other.value).setcontext(self.context), None
+
+    def multiTo(self, other):
+        if isinstance(other, Number):
+            return Number(self.value*other.value).setcontext(self.context), None
+
+    def divideBy(self, other):
+        if isinstance(other, Number):
+            if other.value != 0:
+                return Number(self.value/other.value).setcontext(self.context), None
+            return None, RunTimeError(other.pos_start, other.pos_end, "Division by zero error", self.context)
 
     def __repr__(self):
-    		return str(self.value)
+        return str(self.value)
 
 ########################################################################
 # INTERPRETOR
@@ -358,39 +428,58 @@ class Number:
 
 
 class Interpretor:
-    def visit(self, node):
+    def visit(self, node, context):
         method_name = f'visit_{type(node).__name__}'
         method = getattr(self, method_name, self.no_visit_method)
-        return method(node)
+        return method(node, context)
 
-    def no_visit_method(self, node):
+    def no_visit_method(self, node, context):
         raise Exception(f'No visit_{type(node).__name__} method found')
 
-    def visit_NumberNode(self, node):
-        return Number(node.tok.value).setPos(node.pos_start,node.pos_end)
+    def visit_NumberNode(self, node, context):
+        return RTResult().success(Number(node.tok.value).setcontext(context).setPos(node.pos_start, node.pos_end))
 
-    def visit_BinOpNode(self, node):
-        left = self.visit(node.left_node)
-        right = self.visit(node.right_node)
+    def visit_BinOpNode(self, node, context):
+        res = RTResult()
+        left = res.register(self.visit(node.left_node, context))
+        if res.err:
+            return res
+        right = res.register(self.visit(node.right_node, context))
+        if res.err:
+            return res
+        error = None
         if (node.op_tok.type == TT_PLUS):
-            result = left.addedTo(right)
+            result, error = left.addedTo(right)
         if (node.op_tok.type == TT_MINUS):
-            result = left.subbedBy(right)
+            result, error = left.subbedBy(right)
         if (node.op_tok.type == TT_MUL):
-            result = left.multiTo(right)
+            result, error = left.multiTo(right)
         if (node.op_tok.type == TT_DIV):
-            result = left.divideBy(right)
-        return result.setPos(node.pos_start,node.pos_end)
+            result, error = left.divideBy(right)
+        if error:
+            return res.failure(error)
+        return res.success(result.setPos(node.pos_start, node.pos_end))
 
-    def visit_UnaryOpNode(self, node):
-        number = self.visit(node.node)
+    def visit_UnaryOpNode(self, node, context):
+        res = RTResult()
+        number = res.register(self.visit(node.node, context))
+        if res.err:
+            return res
+
+        error = None
+
         if node.op_tok.value == TT_MINUS:
-            number = number.multiTo(Number(-1))
-        return number.setPos(node.pos_start,node.pos_end)
+            number, error = number.multiTo(Number(-1))
+
+        if error:
+            return res.failure(error)
+
+        return res.success(number.setPos(node.pos_start, node.pos_end))
 
 #######################################
 # RUN
 #######################################
+
 
 def run(fn, text):
     # Generate tokens
@@ -405,6 +494,8 @@ def run(fn, text):
 
     if ast.error:
         return None, ast.error
+
+    context = Context("Program")
     interpretor = Interpretor()
-    result = interpretor.visit(ast.node)
-    return result, None
+    result = interpretor.visit(ast.node, context)
+    return result.value, result.err
