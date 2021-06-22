@@ -181,7 +181,8 @@ class Lexer:
 class NumberNode:
     def __init__(self, tok):
         self.tok = tok
-
+        self.pos_start = tok.pos_start
+        self.pos_end = tok.pos_end
     def __repr__(self):
         return f'{self.tok}'
 
@@ -191,7 +192,8 @@ class BinOpNode:
         self.left_node = left_node
         self.op_tok = op_tok
         self.right_node = right_node
-
+        self.pos_start = self.left_node.pos_start
+        self.pos_end = self.right_node.pos_end
     def __repr__(self):
         return f'({self.left_node}, {self.op_tok}, {self.right_node})'
 
@@ -200,7 +202,8 @@ class UnaryOpNode:
     def __init__(self, op_tok, node):
         self.op_tok = op_tok
         self.node = node
-
+        self.pos_start = self.op_tok.pos_start
+        self.pos_end = self.node.pos_end
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
 
@@ -315,6 +318,75 @@ class Parser:
             left = BinOpNode(left, op_tok, right)
 
         return res.success(left)
+########################################################################
+# VALUES
+########################################################################
+
+
+class Number:
+    def __init__(self, value):
+        self.value = value
+        self.setPos()
+
+    def setPos(self, start_pos=None, end_pos=None):
+        self.pos_start = start_pos
+        self.pos_end = end_pos
+        return self
+
+    def addedTo(self,other):
+        if isinstance(other,Number):
+            return Number(self.value+other.value)
+
+    def subbedBy(self,other):
+        if isinstance(other,Number):
+            return Number(self.value-other.value)
+    
+    def multiTo(self,other):
+        if isinstance(other,Number):
+            return Number(self.value*other.value)
+    
+    def divideBy(self,other):
+        if isinstance(other,Number):
+            return Number(self.value/other.value)
+
+    def __repr__(self):
+    		return str(self.value)
+
+########################################################################
+# INTERPRETOR
+########################################################################
+
+
+class Interpretor:
+    def visit(self, node):
+        method_name = f'visit_{type(node).__name__}'
+        method = getattr(self, method_name, self.no_visit_method)
+        return method(node)
+
+    def no_visit_method(self, node):
+        raise Exception(f'No visit_{type(node).__name__} method found')
+
+    def visit_NumberNode(self, node):
+        return Number(node.tok.value).setPos(node.pos_start,node.pos_end)
+
+    def visit_BinOpNode(self, node):
+        left = self.visit(node.left_node)
+        right = self.visit(node.right_node)
+        if (node.op_tok.type == TT_PLUS):
+            result = left.addedTo(right)
+        if (node.op_tok.type == TT_MINUS):
+            result = left.subbedBy(right)
+        if (node.op_tok.type == TT_MUL):
+            result = left.multiTo(right)
+        if (node.op_tok.type == TT_DIV):
+            result = left.divideBy(right)
+        return result.setPos(node.pos_start,node.pos_end)
+
+    def visit_UnaryOpNode(self, node):
+        number = self.visit(node.node)
+        if node.op_tok.value == TT_MINUS:
+            number = number.multiTo(Number(-1))
+        return number.setPos(node.pos_start,node.pos_end)
 
 #######################################
 # RUN
@@ -333,5 +405,6 @@ def run(fn, text):
 
     if ast.error:
         return None, ast.error
-
-    return None, None
+    interpretor = Interpretor()
+    result = interpretor.visit(ast.node)
+    return result, None
