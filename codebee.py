@@ -3,13 +3,18 @@
 #######################################
 
 from error_line import *
+import string
 
 #######################################
 # CONSTANTS
 #######################################
 
 DIGITS = '0123456789'
-
+LETTERS = string.ascii_letters
+LETTERS_DIGITS = LETTERS + DIGITS
+KEYWORDS = [
+    'VAR'
+]
 #######################################
 # ERRORS
 #######################################
@@ -103,6 +108,9 @@ TT_MINUS = 'MINUS'
 TT_MUL = 'MUL'
 TT_DIV = 'DIV'
 TT_POW = 'POW'
+TT_KEYWORD = 'KEYWORD'
+TT_IDENTIFIER = 'IDENTIFIER'
+TT_EQ = 'EQ'
 TT_LPAREN = 'LPAREN'
 TT_RPAREN = 'RPAREN'
 TT_EOF = 'EOF'
@@ -152,6 +160,8 @@ class Lexer:
                 self.advance()
             elif self.current_char in DIGITS:
                 tokens.append(self.make_number())
+            elif self.current_char in LETTERS:
+                tokens.append(self.make_identifier())
             elif self.current_char == '+':
                 tokens.append(Token(TT_PLUS, pos_start=self.pos))
                 self.advance()
@@ -166,6 +176,9 @@ class Lexer:
                 self.advance()
             elif self.current_char == '^':
                 tokens.append(Token(TT_POW, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == '=':
+                tokens.append(Token(TT_EQ, pos_start=self.pos))
                 self.advance()
             elif self.current_char == '(':
                 tokens.append(Token(TT_LPAREN, pos_start=self.pos))
@@ -202,6 +215,14 @@ class Lexer:
         else:
             return Token(TT_FLOAT, float(num_str), pos_start, self.pos)
 
+    def make_identifier(self):
+        id_str = ''
+        pos_start = self.pos.copy()
+        while self.current_char != None and self.current_char in LETTERS_DIGITS+'_':
+            id_str += self.current_char
+            self.advance()
+        tok_type = TT_KEYWORD if id_str in KEYWORDS else TT_IDENTIFIER
+        return Token(tok_type, id_str, pos_start, self.pos)
 #######################################
 # NODES
 #######################################
@@ -215,6 +236,22 @@ class NumberNode:
 
     def __repr__(self):
         return f'{self.tok}'
+
+
+class VarAssignNode:
+    def __init__(self, var_name_tok, value_node):
+        self.var_name_tok = var_name_tok
+        self.value_node = value_node
+        self.pos_start = self.var_name_tok.pos_start
+        self.pos_end = self.value_node.pos_end
+
+
+class VarAccessNode:
+    def __init__(self, var_name_tok):
+        self.var_name_tok = var_name_tok
+
+        self.pos_start = self.var_name_tok.pos_start
+        self.pos_end = self.var_name_tok.pos_end
 
 
 class BinOpNode:
@@ -239,10 +276,32 @@ class UnaryOpNode:
     def __repr__(self):
         return f'({self.op_tok}, {self.node})'
 
-#######################################
-# PARSE RESULT
-#######################################
+################################################################
+# SYMBOLS
+################################################################
 
+
+class SymbolTable:
+    def __init__(self):
+        self.symbols = {}
+        self.parent = None
+
+    def get(self, name):
+        value = self.symbols.get(name, None)
+        if value == None and self.parent:
+            return self.parent.get(name)
+        return value
+
+    def set(self, name, value):
+        self.symbols[name] = value
+
+    def remove(self, name):
+        del self.symbols[name]
+
+
+################################################################
+# PARSE RESULT
+################################################################
 
 class ParseResult:
     def __init__(self):
@@ -308,6 +367,10 @@ class Parser:
             res.register(self.advance())
             return res.success(NumberNode(tok))
 
+        elif tok.type == TT_IDENTIFIER:
+            res.register(self.advance())
+            return res.success(VarAccessNode(tok))
+
         elif tok.type == TT_LPAREN:
             res.register(self.advance())
             expr = res.register(self.expr())
@@ -331,6 +394,28 @@ class Parser:
         return self.bin_op(self.factor, (TT_MUL, TT_DIV, TT_POW))
 
     def expr(self):
+        res = ParseResult()
+        if self.current_tok.type == TT_KEYWORD and self.current_tok.value == 'VAR':
+            res.register(self.advance())
+            if self.current_tok.type != TT_IDENTIFIER:
+                return res.failure(InvalidSyntaxError(
+                    self.current_tok.pos_start, self.current_tok.pos_end,
+                    "Expected Identifier"
+                ))
+            var_name = self.current_tok
+            res.register(self.advance())
+
+            if self.current_tok.type != TT_EQ:
+                return res.failure(InvalidSyntaxError(
+                    self.current_tok.pos_start, self.current_tok.pos_end,
+                    "Expected Equal(=)"
+                ))
+            res.register(self.advance())
+
+            expr = res.register(self.expr())
+            if res.error:
+                return res
+            return res.success(VarAssignNode(var_name, expr))
         return self.bin_op(self.term, (TT_PLUS, TT_MINUS))
 
     ###################################
@@ -384,6 +469,7 @@ class Context:
         self.display_name = display_name
         self.parent = parent
         self.parent_entry_pos = parent_entry_pos
+        self.symbol_table = None
 
 ########################################################################
 # VALUES
@@ -394,43 +480,48 @@ class Number:
     def __init__(self, value):
         self.value = value
         self.setPos()
-        self.setcontext()
+        self.setContext()
 
     def setPos(self, start_pos=None, end_pos=None):
         self.pos_start = start_pos
         self.pos_end = end_pos
         return self
 
-    def setcontext(self, context=None):
+    def setContext(self, context=None):
         self.context = context
         return self
 
     def addedTo(self, other):
         if isinstance(other, Number):
-            return Number(self.value+other.value).setcontext(self.context), None
+            return Number(self.value+other.value).setContext(self.context), None
 
     def subbedBy(self, other):
         if isinstance(other, Number):
-            return Number(self.value-other.value).setcontext(self.context), None
+            return Number(self.value-other.value).setContext(self.context), None
 
     def multiTo(self, other):
         if isinstance(other, Number):
-            return Number(self.value*other.value).setcontext(self.context), None
+            return Number(self.value*other.value).setContext(self.context), None
 
     def divideBy(self, other):
         if isinstance(other, Number):
             if other.value != 0:
-                return Number(self.value/other.value).setcontext(self.context), None
+                return Number(self.value/other.value).setContext(self.context), None
             return None, RunTimeError(other.pos_start, other.pos_end, "Division by zero error", self.context)
 
-    def poweredTo(self,other):
+    def poweredTo(self, other):
         if isinstance(other, Number):
-            if self.value==0 and other.value<=0:
+            if self.value == 0 and other.value <= 0:
                 return None, RunTimeError(other.pos_start, other.pos_end, "Only positive power of zero is defined", self.context)
-            if self.value<0 and other.value!=int(other.value):
+            if self.value < 0 and other.value != int(other.value):
                 return None, RunTimeError(other.pos_start, other.pos_end, "Fractional power to negatives are defined", self.context)
-            return Number(self.value**other.value).setcontext(self.context), None
-            
+            return Number(self.value**other.value).setContext(self.context), None
+
+    def copy(self):
+        copy = Number(self.value)
+        copy.setPos(self.pos_start, self.pos_end)
+        copy.setContext(self.context)
+        return copy
 
     def __repr__(self):
         return str(self.value)
@@ -450,7 +541,32 @@ class Interpretor:
         raise Exception(f'No visit_{type(node).__name__} method found')
 
     def visit_NumberNode(self, node, context):
-        return RTResult().success(Number(node.tok.value).setcontext(context).setPos(node.pos_start, node.pos_end))
+        return RTResult().success(Number(node.tok.value).setContext(context).setPos(node.pos_start, node.pos_end))
+
+    def visit_VarAccessNode(self, node, context):
+        res = RTResult()
+        var_name = node.var_name_tok.value
+        value = context.symbol_table.get(var_name)
+
+        if not value:
+            return res.failure(RunTimeError(
+                node.pos_start, node.pos_end,
+                f"'{var_name}' is not defined",
+                context
+            ))
+
+        value = value.copy().setPos(node.pos_start, node.pos_end)
+        return res.success(value)
+
+    def visit_VarAssignNode(self, node, context):
+        res = RTResult()
+        var_name = node.var_name_tok.value
+        value = res.register(self.visit(node.value_node, context))
+        if res.err:
+            return res
+
+        context.symbol_table.set(var_name, value)
+        return res.success(value)
 
     def visit_BinOpNode(self, node, context):
         res = RTResult()
@@ -483,7 +599,7 @@ class Interpretor:
 
         error = None
 
-        if node.op_tok.type== TT_MINUS:
+        if node.op_tok.type == TT_MINUS:
             number, error = number.multiTo(Number(-1))
 
         if error:
@@ -493,6 +609,10 @@ class Interpretor:
 #######################################
 # RUN
 #######################################
+
+
+global_symbol_table = SymbolTable()
+global_symbol_table.set("null", Number(0))
 
 
 def run(fn, text):
@@ -510,6 +630,7 @@ def run(fn, text):
         return None, ast.error
 
     context = Context("Program")
+    context.symbol_table = global_symbol_table
     interpretor = Interpretor()
     result = interpretor.visit(ast.node, context)
     return result.value, result.err
