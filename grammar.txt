@@ -1,8 +1,0 @@
-expr    : KEYWORD:VAR IDENTIFIER EQ expr
-        : term ((PLUS|MINUS) term)*
-
-term    : factor((MUL|DIV|POW) factor)*
-
-factor  : INT|FLOAT|IDENTIFIER
-        : (PLUS|MINUS) factor
-        : LPAREN expr RPAREN

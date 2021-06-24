@@ -2,11 +2,11 @@
 # IMPORTS
 #######################################
 
-from Lexer import *
-from Symbol import *
-from Parser import *
-from Context import *
-from Interpretor import *
+from Classes.Lexer import *
+from Classes.Symbol import *
+from Classes.Parser import *
+from Classes.Context import *
+from Classes.Interpretor import *
 
 
 #######################################
