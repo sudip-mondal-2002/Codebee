@@ -1,7 +1,7 @@
-from Constants import *
-from Token import *
-from Error import *
-from Position import *
+from Classes.Constants import *
+from Classes.Token import *
+from Classes.Error import *
+from Classes.Position import *
 
 class Lexer:
     def __init__(self, fn, text):
@@ -22,16 +22,22 @@ class Lexer:
         while self.current_char != None:
             if self.current_char in ' \t':
                 self.advance()
+            elif self.current_char == '#':
+                self.skip_comment()
+            elif self.current_char in ';\n':
+                tokens.append(Token(TT_NEWLINE, pos_start=self.pos))
+                self.advance()
             elif self.current_char in DIGITS:
                 tokens.append(self.make_number())
             elif self.current_char in LETTERS:
                 tokens.append(self.make_identifier())
+            elif self.current_char == '"':
+                tokens.append(self.make_string())
             elif self.current_char == '+':
                 tokens.append(Token(TT_PLUS, pos_start=self.pos))
                 self.advance()
             elif self.current_char == '-':
-                tokens.append(Token(TT_MINUS, pos_start=self.pos))
-                self.advance()
+                tokens.append(self.make_minus_or_arrow())
             elif self.current_char == '*':
                 tokens.append(Token(TT_MUL, pos_start=self.pos))
                 self.advance()
@@ -41,14 +47,31 @@ class Lexer:
             elif self.current_char == '^':
                 tokens.append(Token(TT_POW, pos_start=self.pos))
                 self.advance()
-            elif self.current_char == '=':
-                tokens.append(Token(TT_EQ, pos_start=self.pos))
-                self.advance()
             elif self.current_char == '(':
                 tokens.append(Token(TT_LPAREN, pos_start=self.pos))
                 self.advance()
             elif self.current_char == ')':
                 tokens.append(Token(TT_RPAREN, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == '[':
+                tokens.append(Token(TT_LSQUARE, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == ']':
+                tokens.append(Token(TT_RSQUARE, pos_start=self.pos))
+                self.advance()
+            elif self.current_char == '!':
+                token, error = self.make_not_equals()
+                if error:
+                    return [], error
+                tokens.append(token)
+            elif self.current_char == '=':
+                tokens.append(self.make_equals())
+            elif self.current_char == '<':
+                tokens.append(self.make_less_than())
+            elif self.current_char == '>':
+                tokens.append(self.make_greater_than())
+            elif self.current_char == ',':
+                tokens.append(Token(TT_COMMA, pos_start=self.pos))
                 self.advance()
             else:
                 pos_start = self.pos.copy()
@@ -69,9 +92,7 @@ class Lexer:
                 if dot_count == 1:
                     break
                 dot_count += 1
-                num_str += '.'
-            else:
-                num_str += self.current_char
+            num_str += self.current_char
             self.advance()
 
         if dot_count == 0:
@@ -79,11 +100,102 @@ class Lexer:
         else:
             return Token(TT_FLOAT, float(num_str), pos_start, self.pos)
 
+    def make_string(self):
+        string = ''
+        pos_start = self.pos.copy()
+        escape_character = False
+        self.advance()
+
+        escape_characters = {
+            'n': '\n',
+            't': '\t'
+        }
+
+        while self.current_char != None and (self.current_char != '"' or escape_character):
+            if escape_character:
+                string += escape_characters.get(self.current_char,
+                                                self.current_char)
+            else:
+                if self.current_char == '\\':
+                    escape_character = True
+                else:
+                    string += self.current_char
+            self.advance()
+            escape_character = False
+
+        self.advance()
+        return Token(TT_STRING, string, pos_start, self.pos)
+
     def make_identifier(self):
         id_str = ''
         pos_start = self.pos.copy()
-        while self.current_char != None and self.current_char in LETTERS_DIGITS+'_':
+
+        while self.current_char != None and self.current_char in LETTERS_DIGITS + '_':
             id_str += self.current_char
             self.advance()
+
         tok_type = TT_KEYWORD if id_str in KEYWORDS else TT_IDENTIFIER
         return Token(tok_type, id_str, pos_start, self.pos)
+
+    def make_minus_or_arrow(self):
+        tok_type = TT_MINUS
+        pos_start = self.pos.copy()
+        self.advance()
+
+        if self.current_char == '>':
+            self.advance()
+            tok_type = TT_ARROW
+
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+
+    def make_not_equals(self):
+        pos_start = self.pos.copy()
+        self.advance()
+
+        if self.current_char == '=':
+            self.advance()
+            return Token(TT_NE, pos_start=pos_start, pos_end=self.pos), None
+
+        self.advance()
+        return None, ExpectedCharError(pos_start, self.pos, "'=' (after '!')")
+
+    def make_equals(self):
+        tok_type = TT_EQ
+        pos_start = self.pos.copy()
+        self.advance()
+
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_EE
+
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+
+    def make_less_than(self):
+        tok_type = TT_LT
+        pos_start = self.pos.copy()
+        self.advance()
+
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_LTE
+
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+
+    def make_greater_than(self):
+        tok_type = TT_GT
+        pos_start = self.pos.copy()
+        self.advance()
+
+        if self.current_char == '=':
+            self.advance()
+            tok_type = TT_GTE
+
+        return Token(tok_type, pos_start=pos_start, pos_end=self.pos)
+
+    def skip_comment(self):
+        self.advance()
+
+        while self.current_char != '\n':
+            self.advance()
+
+        self.advance()
